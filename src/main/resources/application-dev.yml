@@ -1,0 +1,10 @@
+spring:
+  jpa:
+    show-sql: true
+
+catalog:
+  seed-enabled: true
+
+logging:
+  level:
+    com.shippingapp.shippingapp: DEBUG
