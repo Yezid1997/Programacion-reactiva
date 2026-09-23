@@ -31,7 +31,7 @@ public class DBConfiguration {
         assert dbProperties.getFullUrl() != null;
 
         ConnectionFactory connectionFactory = ConnectionFactoryBuilder.withUrl(dbProperties.getFullUrl())
-                .username(dbProperties.userName())
+                .username(dbProperties.username())
                 .password(dbProperties.password())
                 .build();
 
