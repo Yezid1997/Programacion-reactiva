@@ -4,19 +4,14 @@ server:
 spring:
   application:
     name: shippingapp
-  datasource:
-    url: jdbc:h2:mem:productsdb;
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: true
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+  database:
+    url: r2dbc:postgresql://localhost:5432
+    schema: shippingapp
+    username: postgres
+    password: postgres
+    pool:
+      max-size: 20
+      max-idle-minutes: 30
 
 management:
   endpoints:
