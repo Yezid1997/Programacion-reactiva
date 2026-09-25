@@ -72,6 +72,33 @@ public class CupoService {
                 );
     }
 
+    public Mono<VehiculoEntity> consumirReserva(Long vehiculoId, Integer pesoKg) {
+        return databaseClient.sql("""
+                UPDATE vehiculo
+                SET reservado_kg = reservado_kg - :peso
+                WHERE id = :id
+                  AND reservado_kg >= :peso
+                RETURNING id, placa, ciudad, cupo_kg, reservado_kg
+                """)
+                .bind("peso", pesoKg)
+                .bind("id", vehiculoId)
+                .map((row, metadata) ->
+                        VehiculoEntity.builder()
+                                .id(row.get("id", Long.class))
+                                .placa(row.get("placa", String.class))
+                                .ciudad(row.get("ciudad", String.class))
+                                .cupoKg(row.get("cupo_kg", Integer.class))
+                                .reservadoKg(row.get("reservado_kg", Integer.class))
+                                .build()
+                )
+                .one()
+                .switchIfEmpty(
+                        Mono.error(
+                                new VehiculoNoExisteException(vehiculoId)
+                        )
+                );
+    }
+
     private Mono<VehiculoEntity> determinarErrorReserva(
             Long vehiculoId,
             Integer pesoKg
