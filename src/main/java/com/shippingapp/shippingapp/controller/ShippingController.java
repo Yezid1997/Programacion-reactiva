@@ -2,6 +2,8 @@ package com.shippingapp.shippingapp.controller;
 
 import com.shippingapp.shippingapp.dto.CrearDespachoRequest;
 import com.shippingapp.shippingapp.model.Despacho;
+import com.shippingapp.shippingapp.model.EstadoDespacho;
+import com.shippingapp.shippingapp.service.DespachoEventBus;
 import com.shippingapp.shippingapp.service.DespachoService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +27,7 @@ import reactor.core.publisher.Mono;
 public class ShippingController {
 
     private final DespachoService despachoService;
+    private final DespachoEventBus eventBus;
 
     @PostMapping
     public Mono<ResponseEntity<Despacho>> create(
@@ -51,6 +54,24 @@ public class ShippingController {
 
     @GetMapping(value = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<Despacho>> events(@PathVariable Long id) {
-        return Flux.empty();
+        return despachoService.buscarPorId(id)
+                .flatMapMany(actual -> eventBus.porDespacho(id)
+                        .startWith(actual)
+                        .takeUntil(despacho -> esTerminal(despacho.getEstado())))
+                .map(ShippingController::aEvento);
+    }
+
+    static boolean esTerminal(EstadoDespacho estado) {
+        return estado == EstadoDespacho.EN_RUTA
+                || estado == EstadoDespacho.ENTREGADO
+                || estado == EstadoDespacho.RECHAZADO
+                || estado == EstadoDespacho.EXPIRADO;
+    }
+
+    static ServerSentEvent<Despacho> aEvento(Despacho despacho) {
+        return ServerSentEvent.<Despacho>builder(despacho)
+                .id(despacho.getId() + "-" + despacho.getEstado())
+                .event(despacho.getEstado().name())
+                .build();
     }
 }

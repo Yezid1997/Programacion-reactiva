@@ -25,7 +25,6 @@ import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
-import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -42,22 +41,18 @@ public class DespachoService {
     private final DespachoMapper despachoMapper;
     private final TransactionalOperator transactionalOperator;
     private final CupoService cupoService;
+    private final DespachoEventBus eventBus;
 
     public Mono<CreacionDespachoResult> crear(
             CrearDespachoRequest request,
             String idempotencyKey
     ) {
-        return Mono.deferContextual(ctx -> {
-            String trazaId = TrazaContext.trazaId(ctx);
-            log.info("[{}] Recibida solicitud de despacho para ciudad {}", trazaId, request.getCiudad());
-
-            return buscarPorIdempotency(idempotencyKey)
-                    .map(despacho -> new CreacionDespachoResult(despacho, false))
-                    .switchIfEmpty(
-                            crearNuevoDespacho(request, idempotencyKey, trazaId)
-                                    .map(despacho -> new CreacionDespachoResult(despacho, true))
-                    );
-        });
+        return TrazaContext.info(
+                        log,
+                        "Recibida solicitud de despacho para ciudad {}",
+                        request.getCiudad()
+                )
+                .then(resolver(request, idempotencyKey));
     }
 
     public Mono<Despacho> buscarPorId(Long id) {
@@ -67,7 +62,8 @@ public class DespachoService {
     }
 
     public Mono<Despacho> confirmar(Long id) {
-        return despachoRepository.findById(id)
+        return TrazaContext.info(log, "Confirmando despacho {}", id)
+                .then(despachoRepository.findById(id))
                 .switchIfEmpty(Mono.error(new DespachoNoExisteException(id)))
                 .flatMap(despacho -> {
                     if (despacho.getEstado() != EstadoDespacho.ASIGNADO) {
@@ -75,7 +71,7 @@ public class DespachoService {
                                 new EstadoInvalidoException(id, despacho.getEstado())
                         );
                     }
-                    return paqueteRepository.findByDespachoId(id)
+                    Mono<DespachoEntity> confirmacion = paqueteRepository.findByDespachoId(id)
                             .concatMap(paquete ->
                                     cupoService.consumirReserva(
                                             paquete.getVehiculoId(),
@@ -86,36 +82,68 @@ public class DespachoService {
                                 despacho.setEstado(EstadoDespacho.EN_RUTA);
                                 despacho.setExpiraEn(null);
                                 return despachoRepository.save(despacho);
-                            }))
-                            .flatMap(entity -> mapearConPaquetes(entity));
+                            }));
+
+                    return transactionalOperator.transactional(confirmacion)
+                            .flatMap(this::mapearConPaquetes)
+                            .flatMap(eventBus::publicar);
                 });
+    }
+
+    private Mono<CreacionDespachoResult> resolver(
+            CrearDespachoRequest request,
+            String idempotencyKey
+    ) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return crearNuevoDespacho(request, null)
+                    .map(despacho -> new CreacionDespachoResult(despacho, true));
+        }
+
+        return despachoRepository.findByIdempotencyKey(idempotencyKey)
+                .flatMap(existente -> {
+                    if (existente.getEstado() == EstadoDespacho.RECIBIDO) {
+                        return continuarAsignacion(existente, request)
+                                .map(despacho -> new CreacionDespachoResult(despacho, true));
+                    }
+                    return mapearConPaquetes(existente)
+                            .map(despacho -> new CreacionDespachoResult(despacho, false));
+                })
+                .switchIfEmpty(Mono.defer(() ->
+                        crearNuevoDespacho(request, idempotencyKey)
+                                .map(despacho -> new CreacionDespachoResult(despacho, true))
+                ));
     }
 
     private Mono<Despacho> crearNuevoDespacho(
             CrearDespachoRequest request,
-            String idempotencyKey,
-            String trazaId
+            String idempotencyKey
     ) {
-        return guardarRecibido(request, idempotencyKey, trazaId)
-                .flatMap(despachoRecibido ->
-                        asignacionSaga.reservarPaquetes(request.getPaquetes())
-                                .flatMap(reservas ->
-                                        transportistaClient.consultarDatosLogisticos(request.getCiudad())
-                                                .flatMap(datos ->
-                                                        procesarDatosLogisticos(
-                                                                despachoRecibido,
-                                                                request,
-                                                                reservas,
-                                                                datos
-                                                        )
-                                                )
-                                                .onErrorResume(error -> {
-                                                    if (error instanceof ZonaRiesgosaException) {
-                                                        return Mono.error(error);
-                                                    }
-                                                    return asignacionSaga.compensar(reservas)
-                                                            .then(Mono.error(error));
+        return guardarRecibido(request, idempotencyKey)
+                .flatMap(despachoRecibido -> continuarAsignacion(despachoRecibido, request));
+    }
+
+    private Mono<Despacho> continuarAsignacion(
+            DespachoEntity despachoRecibido,
+            CrearDespachoRequest request
+    ) {
+        return asignacionSaga.reservarPaquetes(request.getPaquetes())
+                .flatMap(reservas ->
+                        transportistaClient.consultarDatosLogisticos(request.getCiudad())
+                                .flatMap(datos ->
+                                        procesarDatosLogisticos(
+                                                despachoRecibido,
+                                                request,
+                                                datos
+                                        )
+                                )
+                                .flatMap(eventBus::publicar)
+                                .onErrorResume(error ->
+                                        asignacionSaga.compensar(reservas)
+                                                .onErrorResume(compensacion -> {
+                                                    error.addSuppressed(compensacion);
+                                                    return Mono.empty();
                                                 })
+                                                .then(Mono.error(error))
                                 )
                 );
     }
@@ -123,16 +151,16 @@ public class DespachoService {
     private Mono<Despacho> procesarDatosLogisticos(
             DespachoEntity despachoRecibido,
             CrearDespachoRequest request,
-            List<ReservaCupo> reservas,
             DatosLogisticos datos
     ) {
         if (datos.scoreRiesgo() > UMBRAL_RIESGO) {
-            return asignacionSaga.compensar(reservas)
-                    .then(actualizarEstado(
-                            despachoRecibido.getId(),
-                            EstadoDespacho.RECHAZADO,
-                            datos
-                    ))
+            return actualizarEstado(
+                    despachoRecibido.getId(),
+                    EstadoDespacho.RECHAZADO,
+                    datos
+            )
+                    .flatMap(this::mapearConPaquetes)
+                    .flatMap(eventBus::publicar)
                     .then(Mono.error(new ZonaRiesgosaException(datos.scoreRiesgo())));
         }
 
@@ -141,19 +169,25 @@ public class DespachoService {
 
     private Mono<DespachoEntity> guardarRecibido(
             CrearDespachoRequest request,
-            String idempotencyKey,
-            String trazaId
+            String idempotencyKey
     ) {
-        DespachoEntity entity = DespachoEntity.builder()
-                .clienteId(request.getClienteId())
-                .ciudad(request.getCiudad())
-                .estado(EstadoDespacho.RECIBIDO)
-                .trazaId(trazaId)
-                .idempotencyKey(blankToNull(idempotencyKey))
-                .creadoEn(OffsetDateTime.now())
-                .build();
+        return Mono.deferContextual(ctx -> {
+            DespachoEntity entity = DespachoEntity.builder()
+                    .clienteId(request.getClienteId())
+                    .ciudad(request.getCiudad())
+                    .estado(EstadoDespacho.RECIBIDO)
+                    .trazaId(TrazaContext.trazaId(ctx))
+                    .idempotencyKey(blankToNull(idempotencyKey))
+                    .creadoEn(OffsetDateTime.now())
+                    .build();
 
-        return despachoRepository.save(entity);
+            log.info(
+                    "[{}] Persistiendo despacho RECIBIDO ciudad {}",
+                    TrazaContext.trazaId(ctx),
+                    request.getCiudad()
+            );
+            return despachoRepository.save(entity);
+        });
     }
 
     private Mono<Despacho> asignarEnTransaccion(
@@ -183,7 +217,7 @@ public class DespachoService {
                                         .pesoKg(paquete.getPesoKg())
                                         .build()
                                 )
-                                .flatMap(paqueteRepository::save)
+                                .concatMap(paqueteRepository::save)
                                 .then(Mono.just(despacho))
                 );
 
@@ -191,7 +225,7 @@ public class DespachoService {
                 .flatMap(this::mapearConPaquetes);
     }
 
-    private Mono<Void> actualizarEstado(
+    private Mono<DespachoEntity> actualizarEstado(
             Long despachoId,
             EstadoDespacho estado,
             DatosLogisticos datos
@@ -202,16 +236,7 @@ public class DespachoService {
                     despacho.setScoreRiesgo(datos.scoreRiesgo());
                     despacho.setTarifa(datos.tarifa());
                     return despachoRepository.save(despacho);
-                })
-                .then();
-    }
-
-    private Mono<Despacho> buscarPorIdempotency(String idempotencyKey) {
-        if (idempotencyKey == null || idempotencyKey.isBlank()) {
-            return Mono.empty();
-        }
-        return despachoRepository.findByIdempotencyKey(idempotencyKey)
-                .flatMap(this::mapearConPaquetes);
+                });
     }
 
     private Mono<Despacho> mapearConPaquetes(DespachoEntity entity) {

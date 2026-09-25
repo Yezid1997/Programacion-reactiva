@@ -30,7 +30,7 @@ public class GlobalErrorHandler {
 
     @ExceptionHandler(ZonaRiesgosaException.class)
     public Mono<ResponseEntity<ErrorResponse>> zonaRiesgosa(ZonaRiesgosaException ex) {
-        return respuesta("ZONA_RIESGOSA", ex.getMessage(), HttpStatus.UNPROCESSABLE_ENTITY);
+        return respuesta("ZONA_RIESGOSA", ex.getMessage(), HttpStatus.UNPROCESSABLE_CONTENT);
     }
 
     @ExceptionHandler(DespachoNoExisteException.class)
@@ -45,6 +45,11 @@ public class GlobalErrorHandler {
             EstadoInvalidoException ex
     ) {
         return respuesta("ESTADO_INVALIDO", ex.getMessage(), HttpStatus.CONFLICT);
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public Mono<ResponseEntity<ErrorResponse>> argumentoInvalido(IllegalArgumentException ex) {
+        return respuesta("VALIDACION", ex.getMessage(), HttpStatus.BAD_REQUEST);
     }
 
     @ExceptionHandler(WebExchangeBindException.class)
