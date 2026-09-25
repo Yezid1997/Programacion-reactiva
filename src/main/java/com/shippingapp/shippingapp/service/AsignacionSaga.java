@@ -7,6 +7,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @Service
@@ -16,38 +17,47 @@ public class AsignacionSaga {
     private final CupoService cupoService;
 
     /**
-     * Reserva cupo paquete a paquete (orden importa para compensar de atrás hacia adelante).
-     * Si un paquete falla, libera todo lo ya reservado antes de propagar el error.
+     * Reserva cupo paquete a paquete. Si uno falla a mitad, devuelve el cupo
+     * ya tomado en orden inverso (el último reservado se libera primero).
      */
     public Mono<List<ReservaCupo>> reservarPaquetes(List<PaqueteRequest> paquetes) {
-        List<ReservaCupo> reservasExitosas = new ArrayList<>();
+        return Mono.defer(() -> {
+            List<ReservaCupo> reservasExitosas = new ArrayList<>();
 
-        return Flux.fromIterable(paquetes)
-                .concatMap(paquete ->
-                        cupoService.reservar(
-                                        paquete.getVehiculoId(),
-                                        paquete.getPesoKg()
-                                )
-                                .map(vehiculo -> {
-                                    ReservaCupo reserva = new ReservaCupo(
+            return Flux.fromIterable(paquetes)
+                    .concatMap(paquete ->
+                            cupoService.reservar(
                                             paquete.getVehiculoId(),
                                             paquete.getPesoKg()
-                                    );
-                                    reservasExitosas.add(reserva);
-                                    return reserva;
-                                })
-                )
-                .collectList()
-                .onErrorResume(error ->
-                        compensar(reservasExitosas).then(Mono.error(error))
-                );
+                                    )
+                                    .map(vehiculo -> {
+                                        ReservaCupo reserva = new ReservaCupo(
+                                                paquete.getVehiculoId(),
+                                                paquete.getPesoKg()
+                                        );
+                                        reservasExitosas.add(reserva);
+                                        return reserva;
+                                    })
+                    )
+                    .collectList()
+                    .onErrorResume(error ->
+                            compensar(List.copyOf(reservasExitosas))
+                                    .onErrorResume(compensacion -> {
+                                        error.addSuppressed(compensacion);
+                                        return Mono.empty();
+                                    })
+                                    .then(Mono.error(error))
+                    );
+        });
     }
 
     public Mono<Void> compensar(List<ReservaCupo> reservas) {
-        if (reservas.isEmpty()) {
+        if (reservas == null || reservas.isEmpty()) {
             return Mono.empty();
         }
-        return Flux.fromIterable(reservas)
+        List<ReservaCupo> reverso = new ArrayList<>(reservas);
+        Collections.reverse(reverso);
+        return Flux.fromIterable(reverso)
                 .concatMap(reserva ->
                         cupoService.liberar(
                                 reserva.vehiculoId(),

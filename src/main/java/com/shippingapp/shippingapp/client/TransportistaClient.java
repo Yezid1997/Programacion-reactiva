@@ -1,11 +1,13 @@
 package com.shippingapp.shippingapp.client;
 
+import com.shippingapp.shippingapp.context.TrazaContext;
 import com.shippingapp.shippingapp.dto.ClimaResponse;
 import com.shippingapp.shippingapp.dto.DatosLogisticos;
 import com.shippingapp.shippingapp.dto.RiesgoResponse;
 import com.shippingapp.shippingapp.dto.TarifaResponse;
 import com.shippingapp.shippingapp.service.TarifaCatalogService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
@@ -19,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class TransportistaClient {
 
     private static final Duration TIMEOUT_RIESGO = Duration.ofMillis(800);
@@ -31,16 +34,18 @@ public class TransportistaClient {
     private final Map<String, Mono<ClimaResponse>> climaPorCiudad = new ConcurrentHashMap<>();
 
     public Mono<DatosLogisticos> consultarDatosLogisticos(String ciudad) {
-        return Mono.zip(
-                consultarTarifa(ciudad),
-                consultarClima(ciudad),
-                consultarRiesgo(ciudad)
-        ).map(tuple -> new DatosLogisticos(
-                tuple.getT1().tarifa(),
-                tuple.getT2().ventanaHoras(),
-                tuple.getT2().condicion(),
-                tuple.getT3().score()
-        ));
+        return TrazaContext.info(log, "Consultando externos en paralelo para {}", ciudad)
+                .then(Mono.zip(
+                        consultarTarifa(ciudad),
+                        consultarClima(ciudad),
+                        consultarRiesgo(ciudad)
+                ))
+                .map(tuple -> new DatosLogisticos(
+                        tuple.getT1().tarifa(),
+                        tuple.getT2().ventanaHoras(),
+                        tuple.getT2().condicion(),
+                        tuple.getT3().score()
+                ));
     }
 
     public Mono<TarifaResponse> consultarTarifa(String ciudad) {

@@ -29,6 +29,5 @@ public class CrearDespachoRequest {
     private String ciudad;
 
     @NotEmpty(message = "El despacho debe tener al menos un paquete")
-    @Valid
-    private List<PaqueteRequest> paquetes;
+    private List<@Valid PaqueteRequest> paquetes;
 }

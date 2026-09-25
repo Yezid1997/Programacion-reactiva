@@ -1,5 +1,6 @@
 package com.shippingapp.shippingapp.controller;
 
+import com.shippingapp.shippingapp.dto.CargaMasivaResponse;
 import com.shippingapp.shippingapp.dto.CrearVehiculoRequest;
 import com.shippingapp.shippingapp.model.Vehiculo;
 import com.shippingapp.shippingapp.service.VehiculoService;
@@ -44,11 +45,12 @@ public class VehicleController {
 
     @PostMapping(
             value = "/bulk",
-            consumes = MediaType.APPLICATION_NDJSON_VALUE
+            consumes = MediaType.APPLICATION_NDJSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE
     )
-    public Mono<Void> cargarMasivo(
+    public Mono<CargaMasivaResponse> cargarMasivo(
             @RequestBody Flux<Vehiculo> vehiculos
     ) {
-        return Mono.empty();
+        return vehiculoService.cargarMasivo(vehiculos);
     }
 }

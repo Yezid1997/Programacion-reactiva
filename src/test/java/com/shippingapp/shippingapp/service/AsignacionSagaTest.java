@@ -14,6 +14,7 @@ import reactor.test.StepVerifier;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -71,5 +72,29 @@ class AsignacionSagaTest {
                 .verify();
 
         verify(cupoService).liberar(1L, 50);
+    }
+
+    @Test
+    void compensaEnOrdenInversoCuandoFallaElTercerPaquete() {
+        var paquetes = List.of(
+                PaqueteRequest.builder().vehiculoId(1L).pesoKg(10).build(),
+                PaqueteRequest.builder().vehiculoId(2L).pesoKg(20).build(),
+                PaqueteRequest.builder().vehiculoId(3L).pesoKg(999).build()
+        );
+
+        when(cupoService.reservar(1L, 10)).thenReturn(Mono.just(VEHICULO_OK));
+        when(cupoService.reservar(2L, 20)).thenReturn(Mono.just(VEHICULO_OK));
+        when(cupoService.reservar(3L, 999))
+                .thenReturn(Mono.error(new CupoInsuficienteException(3L, 999)));
+        when(cupoService.liberar(2L, 20)).thenReturn(Mono.just(VEHICULO_OK));
+        when(cupoService.liberar(1L, 10)).thenReturn(Mono.just(VEHICULO_OK));
+
+        StepVerifier.create(asignacionSaga.reservarPaquetes(paquetes))
+                .expectError(CupoInsuficienteException.class)
+                .verify();
+
+        var orden = inOrder(cupoService);
+        orden.verify(cupoService).liberar(2L, 20);
+        orden.verify(cupoService).liberar(1L, 10);
     }
 }
