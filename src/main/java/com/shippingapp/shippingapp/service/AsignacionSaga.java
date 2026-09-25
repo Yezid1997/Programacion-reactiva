@@ -24,7 +24,11 @@ public class AsignacionSaga {
         return Mono.defer(() -> {
             List<ReservaCupo> reservasExitosas = new ArrayList<>();
 
-            return Flux.fromIterable(paquetes)
+            return Mono.just(paquetes)
+                    .flatMapIterable(lista -> lista)
+                    // concatMap, no flatMap: el orden de reserva es el orden de
+                    // compensación. En paralelo, dos paquetes del mismo vehículo
+                    // pisarían el UPDATE y la saga no sabría qué devolver.
                     .concatMap(paquete ->
                             cupoService.reservar(
                                             paquete.getVehiculoId(),

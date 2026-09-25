@@ -18,6 +18,8 @@ public class ExpiracionJob {
 
     public ExpiracionJob(ExpiracionService expiracionService) {
         this.suscripcion = Flux.interval(Duration.ofSeconds(30))
+                // Si el tick anterior sigue en vuelo, el nuevo se descarta:
+                // encolar expiraciones viejas no aporta y sí puede pisar el pool.
                 .onBackpressureDrop()
                 .concatMap(tick ->
                         expiracionService.expirarAsignacionesVencidas()

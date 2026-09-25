@@ -3,6 +3,9 @@ package com.shippingapp.shippingapp.service;
 import com.shippingapp.shippingapp.dto.FilaReporte;
 import com.shippingapp.shippingapp.dto.ReporteCiudad;
 import org.junit.jupiter.api.Test;
+import org.reactivestreams.Subscription;
+import reactor.core.publisher.BaseSubscriber;
+import reactor.core.publisher.Flux;
 import reactor.test.StepVerifier;
 import reactor.test.publisher.TestPublisher;
 
@@ -50,5 +53,31 @@ class ReporteServiceTest {
         publisher.assertSubscribers(1);
         publisher.assertMinRequested(ReporteService.LIMITE_DEMANDA);
         publisher.assertMaxRequested(ReporteService.LIMITE_DEMANDA);
+    }
+
+    @Test
+    void consumidorLentoNoPideLaTablaEntera() {
+        TestPublisher<FilaReporte> publisher = TestPublisher.create();
+        reporteService.streamDesde(publisher.flux())
+                .subscribe(new BaseSubscriber<ReporteCiudad>() {
+                    @Override
+                    protected void hookOnSubscribe(Subscription subscription) {
+                        request(1);
+                    }
+                });
+
+        publisher.assertMaxRequested(ReporteService.LIMITE_DEMANDA);
+    }
+
+    @Test
+    void laSumaCorreEnElSchedulerParalelo() {
+        StepVerifier.create(reporteService.streamDesde(Flux.just(
+                        new FilaReporte("BOG", 1L, 10, new BigDecimal("100.00"))
+                )))
+                .assertNext(reporte -> {
+                    assertThat(reporte.kilos()).isEqualTo(10);
+                    assertThat(Thread.currentThread().getName()).contains("parallel");
+                })
+                .verifyComplete();
     }
 }

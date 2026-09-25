@@ -5,6 +5,8 @@ import com.shippingapp.shippingapp.dto.ClimaResponse;
 import com.shippingapp.shippingapp.dto.DatosLogisticos;
 import com.shippingapp.shippingapp.dto.RiesgoResponse;
 import com.shippingapp.shippingapp.dto.TarifaResponse;
+import com.shippingapp.shippingapp.exception.RiesgoNoDisponibleException;
+import com.shippingapp.shippingapp.exception.TarifaNoDisponibleException;
 import com.shippingapp.shippingapp.service.TarifaCatalogService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,26 +51,56 @@ public class TransportistaClient {
     }
 
     public Mono<TarifaResponse> consultarTarifa(String ciudad) {
-        return webClient.get()
-                .uri("/external/tarifas/{ciudad}", ciudad)
-                .retrieve()
-                .bodyToMono(TarifaResponse.class)
-                .retryWhen(reintentosTarifa())
-                .onErrorResume(error -> tarifaCatalogService.tarifaBase(ciudad)
-                        .map(base -> new TarifaResponse(ciudad, base)));
+        return Mono.deferContextual(ctx -> {
+            log.info("[{}] inicio tarifa {}", TrazaContext.trazaId(ctx), ciudad);
+            return webClient.get()
+                    .uri("/external/tarifas/{ciudad}", ciudad)
+                    .retrieve()
+                    .bodyToMono(TarifaResponse.class)
+                    .retryWhen(reintentosTarifa())
+                    .onErrorMap(error -> new TarifaNoDisponibleException(ciudad, error))
+                    .onErrorResume(TarifaNoDisponibleException.class, error -> catalogo(ciudad));
+        });
     }
 
     public Mono<ClimaResponse> consultarClima(String ciudad) {
-        return climaPorCiudad.computeIfAbsent(ciudad, this::climaCacheado);
+        return Mono.deferContextual(ctx -> {
+            log.info("[{}] inicio clima {}", TrazaContext.trazaId(ctx), ciudad);
+            return climaPorCiudad.computeIfAbsent(ciudad, this::climaCacheado);
+        });
     }
 
     public Mono<RiesgoResponse> consultarRiesgo(String ciudad) {
-        return webClient.get()
-                .uri("/external/riesgo/{ciudad}", ciudad)
-                .retrieve()
-                .bodyToMono(RiesgoResponse.class)
-                .timeout(TIMEOUT_RIESGO)
-                .onErrorReturn(new RiesgoResponse(ciudad, SCORE_RIESGO_DEFAULT));
+        return Mono.deferContextual(ctx -> {
+            log.info("[{}] inicio riesgo {}", TrazaContext.trazaId(ctx), ciudad);
+            return webClient.get()
+                    .uri("/external/riesgo/{ciudad}", ciudad)
+                    .retrieve()
+                    .bodyToMono(RiesgoResponse.class)
+                    .timeout(TIMEOUT_RIESGO)
+                    .onErrorMap(error -> new RiesgoNoDisponibleException(ciudad, error))
+                    .onErrorResume(RiesgoNoDisponibleException.class, error -> {
+                        log.warn(
+                                "[{}] Riesgo de {} no respondió a tiempo; score {}",
+                                TrazaContext.trazaId(ctx),
+                                ciudad,
+                                SCORE_RIESGO_DEFAULT
+                        );
+                        return Mono.just(new RiesgoResponse(ciudad, SCORE_RIESGO_DEFAULT));
+                    });
+        });
+    }
+
+    private Mono<TarifaResponse> catalogo(String ciudad) {
+        return Mono.deferContextual(ctx -> {
+            log.warn(
+                    "[{}] Tarifa de {} no disponible tras reintentos; usando catálogo",
+                    TrazaContext.trazaId(ctx),
+                    ciudad
+            );
+            return tarifaCatalogService.tarifaBase(ciudad)
+                    .map(base -> new TarifaResponse(ciudad, base));
+        });
     }
 
     static Retry reintentosTarifa() {
