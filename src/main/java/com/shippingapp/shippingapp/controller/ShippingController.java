@@ -5,6 +5,7 @@ import com.shippingapp.shippingapp.model.Despacho;
 import com.shippingapp.shippingapp.model.EstadoDespacho;
 import com.shippingapp.shippingapp.service.DespachoEventBus;
 import com.shippingapp.shippingapp.service.DespachoService;
+import com.shippingapp.shippingapp.support.ReactiveSupport;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -55,10 +56,16 @@ public class ShippingController {
     @GetMapping(value = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<Despacho>> events(@PathVariable Long id) {
         return despachoService.buscarPorId(id)
-                .flatMapMany(actual -> eventBus.porDespacho(id)
-                        .startWith(actual)
-                        .takeUntil(despacho -> esTerminal(despacho.getEstado())))
-                .map(ShippingController::aEvento);
+                .flatMapMany(actual -> {
+                    Flux<ServerSentEvent<Despacho>> datos = eventBus.porDespacho(id)
+                            .startWith(actual)
+                            .distinctUntilChanged(ShippingController::firmaEstado)
+                            .takeUntil(despacho -> esTerminal(despacho.getEstado()))
+                            .map(ShippingController::aEvento);
+                    return ReactiveSupport.alDesconectar(
+                            ReactiveSupport.fundirConHeartbeat(datos, ReactiveSupport.PERIODO_LATIDO)
+                    );
+                });
     }
 
     static boolean esTerminal(EstadoDespacho estado) {
@@ -69,9 +76,15 @@ public class ShippingController {
     }
 
     static ServerSentEvent<Despacho> aEvento(Despacho despacho) {
+        String traza = despacho.getTrazaId() == null ? "sin-traza" : despacho.getTrazaId();
         return ServerSentEvent.<Despacho>builder(despacho)
                 .id(despacho.getId() + "-" + despacho.getEstado())
                 .event(despacho.getEstado().name())
+                .comment("trazaId=" + traza)
                 .build();
+    }
+
+    private static String firmaEstado(Despacho despacho) {
+        return despacho.getId() + ":" + despacho.getEstado();
     }
 }

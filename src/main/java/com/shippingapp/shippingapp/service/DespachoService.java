@@ -210,13 +210,16 @@ public class DespachoService {
 
         Mono<DespachoEntity> asignacion = despachoRepository.save(despachoRecibido)
                 .flatMap(despacho ->
-                        Flux.fromIterable(request.getPaquetes())
+                        Mono.just(request.getPaquetes())
+                                .flatMapIterable(paquetes -> paquetes)
                                 .map(paquete -> PaqueteEntity.builder()
                                         .despachoId(despacho.getId())
                                         .vehiculoId(paquete.getVehiculoId())
                                         .pesoKg(paquete.getPesoKg())
                                         .build()
                                 )
+                                // concatMap: la transacción R2DBC tiene una sola
+                                // conexión; flatMap pediría escrituras en paralelo.
                                 .concatMap(paqueteRepository::save)
                                 .then(Mono.just(despacho))
                 );

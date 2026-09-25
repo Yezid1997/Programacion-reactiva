@@ -110,6 +110,7 @@ class ApiWebTest {
                         .id(5L)
                         .estado(EstadoDespacho.EN_RUTA)
                         .ciudad("BOG")
+                        .trazaId("sse-traza")
                         .build()
         ));
 
@@ -122,10 +123,28 @@ class ApiWebTest {
                 .returnResult(String.class)
                 .getResponseBody();
 
-        StepVerifier.create(cuerpo)
-                .expectNextMatches(evento -> evento.contains("EN_RUTA"))
-                .thenCancel()
-                .verify(Duration.ofSeconds(5));
+        StepVerifier.create(cuerpo.collectList())
+                .assertNext(partes -> {
+                    String texto = String.join("", partes);
+                    assertThat(texto).contains("EN_RUTA");
+                    assertThat(texto).contains("sse-traza");
+                    assertThat(texto).contains("BOG");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void generaTrazaIdCuandoElHeaderNoViene() {
+        webTestClient.post()
+                .uri("/api/despachos")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"ciudad\":\"BOG\"}")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectHeader().valueMatches("X-Traza-Id", ".+")
+                .expectBody()
+                .jsonPath("$.codigo").isEqualTo("VALIDACION")
+                .jsonPath("$.trazaId").isNotEmpty();
     }
 
     @Test

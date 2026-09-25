@@ -220,11 +220,14 @@ El test de integración de cupo se omite si Postgres no está escuchando en `loc
 |--------|-----------|
 | `AsignacionSagaTest` | `StepVerifier`: reserva y compensación en orden inverso |
 | `DespachoServiceTest` | Score > 80 libera cupo; score 80 asigna; idempotencia; `trazaId` desde el Context |
-| `TransportistaClientTest` | `Mono.zip`, retry, cache, timeout + fallback |
-| `ReporteServiceTest` | `TestPublisher`: agregación y `limitRate` |
-| `DespachoEventBusTest` | Un `Sinks.multicast` alimenta tablero y stream del despacho |
-| `ApiWebTest` | `WebTestClient`: `@Valid` 400, 422, 409, SSE, NDJSON in/out |
-| `CupoAsignacionIntegrationTest` | Postgres real: cupo queda igual tras compensar |
+| `TransportistaClientTest` | `Mono.zip` en paralelo (tiempo), retry con jitter, 4xx sin reintento, cache, timeout |
+| `ReporteServiceTest` | `TestPublisher`, `limitRate` con consumidor lento, suma en `parallel` |
+| `DespachoEventBusTest` | Multicast a dos streams; tablero lento se queda con el último evento |
+| `ReactiveSupportTest` | Heartbeat que no impide el cierre; `doOnCancel` al desconectar |
+| `ApiWebTest` | `WebTestClient`: 400, 422, 409, SSE con `trazaId`, NDJSON in/out |
+| `CupoAsignacionIntegrationTest` | Postgres: cupo igual tras compensar |
+| `CupoConcurrenciaIntegrationTest` | Postgres: N reservas en paralelo, `cupo >= 0` |
+| `TransaccionRollbackIntegrationTest` | Postgres: error dentro de la transacción no deja filas |
 
 ---
 
@@ -232,9 +235,11 @@ El test de integración de cupo se omite si Postgres no está escuchando en `loc
 
 | Elemento | Ubicación |
 |----------|-----------|
-| `flatMap` / `concatMap` (saga ordenada) | `AsignacionSaga.java` |
+| `flatMapIterable` + `concatMap` (orden de la saga) + `Mono.defer` | `AsignacionSaga.java`, `DespachoService.java` |
 | `Mono.zip` (externos en paralelo) | `TransportistaClient.java` |
-| `retryWhen(Retry.backoff(3, 200ms))` + fallback de catálogo | `TransportistaClient.java` |
+| `Flux.merge` + `publish().refCount()` del pulso | `OpsController.java` |
+| `publishOn(Schedulers.parallel())` en la suma | `ReactiveSupport.java`, `ReporteService.java` |
+| `retryWhen` + jitter + filter + `onErrorMap` | `TransportistaClient.java` |
 | `cache(Duration)` clima 10 min | `TransportistaClient.java` |
 | `timeout(800ms)` riesgo + score 50 | `TransportistaClient.java` |
 | `TransactionalOperator` | `DBConfiguration.java`, `DespachoService.java`, `ExpiracionService.java` |
@@ -242,9 +247,9 @@ El test de integración de cupo se omite si Postgres no está escuchando en `loc
 | Reactor Context (`trazaId`, sin parámetro) | `TrazaWebFilter.java`, `TrazaContext.java` |
 | Job `Flux.interval(30s)` + `onBackpressureDrop` | `ExpiracionJob.java` |
 | Errores reactivos | `GlobalErrorHandler.java` |
-| `Sinks.many().multicast()` | `DespachoEventBus.java` |
-| SSE por despacho (`takeUntil` terminal) | `ShippingController.java` |
-| Tablero hot | `OpsController.java` |
+| `Sinks.many().multicast()` + `onBackpressureLatest` en tablero | `DespachoEventBus.java` |
+| SSE: `takeUntil`, `distinctUntilChanged`, heartbeat, `doOnCancel`/`doFinally` | `ShippingController.java`, `ReactiveSupport.java` |
+| Tablero hot (`Flux.merge`) | `OpsController.java` |
 | NDJSON in, lotes de 500, `ON CONFLICT DO UPDATE` | `VehiculoService.java`, `VehicleController.java` |
 | Reporte + `limitRate` + NDJSON out | `ReporteService.java`, `ReportController.java` |
 
@@ -258,6 +263,8 @@ El test de integración de cupo se omite si Postgres no está escuchando en `loc
 | Transacción de paquetes | `flatMap` pedía varias escrituras a la vez sobre la conexión de la transacción | `concatMap` dentro del `TransactionalOperator` |
 | Confirmación y expiración | Cupo y estado podían quedar a medias, y no había evento | Misma transacción y publicación al bus |
 | F5 | SSE, tablero, NDJSON y reporte devolvían vacío o `null` | Bus multicast, streams y agregación con backpressure |
-| Traza | El id se copiaba como argumento de método | Se lee del Reactor Context en el log y al persistir |
+| Traza | El id se copiaba como argumento de método | Se lee del Reactor Context en el log, el error y el SSE |
+
+Las decisiones y la demo que rompe el simulador en vivo están en [`DECISIONES.md`](DECISIONES.md).
 
 ---

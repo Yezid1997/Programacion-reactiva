@@ -3,8 +3,11 @@ package com.shippingapp.shippingapp.service;
 import com.shippingapp.shippingapp.model.Despacho;
 import com.shippingapp.shippingapp.model.EstadoDespacho;
 import org.junit.jupiter.api.Test;
+import org.reactivestreams.Subscription;
+import reactor.core.publisher.BaseSubscriber;
 import reactor.test.StepVerifier;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -35,5 +38,42 @@ class DespachoEventBusTest {
         assertThat(tablero).containsExactly(evento);
         assertThat(detalle).containsExactly(evento);
         assertThat(otro).isEmpty();
+    }
+
+    @Test
+    void consumidorLentoDelTableroSoloRecibeElUltimoEstado() {
+        DespachoEventBus bus = new DespachoEventBus();
+        List<Despacho> vistos = new ArrayList<>();
+        BaseSubscriber<Despacho> lento = new BaseSubscriber<>() {
+            @Override
+            protected void hookOnSubscribe(Subscription subscription) {
+                request(1);
+            }
+
+            @Override
+            protected void hookOnNext(Despacho value) {
+                vistos.add(value);
+            }
+        };
+        bus.tablero().subscribe(lento);
+
+        Despacho primero = despacho(1L);
+        Despacho segundo = despacho(2L);
+        Despacho tercero = despacho(3L);
+        bus.publicar(primero).block();
+        bus.publicar(segundo).block();
+        bus.publicar(tercero).block();
+
+        assertThat(vistos).containsExactly(primero);
+        lento.request(1);
+        assertThat(vistos).containsExactly(primero, tercero);
+    }
+
+    private static Despacho despacho(Long id) {
+        return Despacho.builder()
+                .id(id)
+                .estado(EstadoDespacho.ASIGNADO)
+                .ciudad("BOG")
+                .build();
     }
 }

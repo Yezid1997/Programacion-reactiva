@@ -32,10 +32,12 @@ public class DespachoEventBus {
     }
 
     /**
-     * Tablero caliente: todos los suscriptores comparten el mismo multicast.
+     * Tablero caliente. onBackpressureLatest: un monitor lento se queda con
+     * el último estado y descarta los intermedios. El stream de un despacho
+     * no usa esta estrategia: ahí perder un ASIGNADO sí importa.
      */
     public Flux<Despacho> tablero() {
-        return bus.asFlux();
+        return bus.asFlux().onBackpressureLatest();
     }
 
     public Flux<Despacho> porDespacho(Long despachoId) {

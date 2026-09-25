@@ -2,6 +2,7 @@ package com.shippingapp.shippingapp.service;
 
 import com.shippingapp.shippingapp.dto.FilaReporte;
 import com.shippingapp.shippingapp.dto.ReporteCiudad;
+import com.shippingapp.shippingapp.support.ReactiveSupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
@@ -35,7 +36,7 @@ public class ReporteService {
         return Flux.defer(() -> {
             Map<String, Acumulado> acumulados = new LinkedHashMap<>();
             Set<Long> despachosContados = new HashSet<>();
-            return filas.limitRate(LIMITE_DEMANDA)
+            return ReactiveSupport.calculoCpu(filas, LIMITE_DEMANDA)
                     .handle((fila, sink) -> {
                         if (fila.ciudad() == null || fila.despachoId() == null) {
                             return;

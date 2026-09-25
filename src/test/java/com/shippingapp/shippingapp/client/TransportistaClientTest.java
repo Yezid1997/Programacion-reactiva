@@ -165,6 +165,49 @@ class TransportistaClientTest {
         assertThat(intentos.get()).isEqualTo(1);
     }
 
+    @Test
+    void error4xxNoReintentaYCaeAlCatalogo() {
+        mockWebServer.enqueue(new MockResponse().setResponseCode(400));
+
+        StepVerifier.create(transportistaClient.consultarTarifa("BOG"))
+                .assertNext(tarifa ->
+                        assertThat(tarifa.tarifa()).isEqualByComparingTo("15000.00"))
+                .verifyComplete();
+
+        assertThat(mockWebServer.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void zipTardaLoDeLaLlamadaMasLenta() {
+        mockWebServer.setDispatcher(new Dispatcher() {
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                String path = request.getPath();
+                MockResponse respuesta;
+                if (path != null && path.contains("/tarifas/")) {
+                    respuesta = json("{\"ciudad\":\"BOG\",\"tarifa\":18500.00}");
+                } else if (path != null && path.contains("/clima/")) {
+                    respuesta = json("{\"ciudad\":\"BOG\",\"ventanaHoras\":6,\"condicion\":\"SOLEADO\"}");
+                } else if (path != null && path.contains("/riesgo/")) {
+                    respuesta = json("{\"ciudad\":\"BOG\",\"score\":25}");
+                } else {
+                    respuesta = new MockResponse().setResponseCode(404);
+                }
+                return respuesta.setBodyDelay(350, java.util.concurrent.TimeUnit.MILLISECONDS);
+            }
+        });
+
+        long inicio = System.nanoTime();
+        StepVerifier.create(transportistaClient.consultarDatosLogisticos("BOG"))
+                .expectNextCount(1)
+                .verifyComplete();
+        long transcurridoMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                System.nanoTime() - inicio
+        );
+
+        assertThat(transcurridoMs).isLessThan(900);
+    }
+
     private static MockResponse json(String body) {
         return new MockResponse()
                 .setBody(body)
